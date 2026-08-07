@@ -54,13 +54,35 @@ async def execute_browser_action(
                 
         # Setup Browser Context with stored session cookies from Vault if app_name is provided
         storage_state = None
+        sensitive_data = None
         if app_name:
             from app.services.vault import get_app_credentials
             credentials = get_app_credentials(user_id, app_name)
             if credentials and "cookies" in credentials:
                 # Playwright expects this exact structure
                 storage_state = credentials
-                
+            elif credentials and (credentials.get("username") or credentials.get("password")):
+                # A portal saved via the App Vault's "web session" form
+                # (name/url/username/password, no cookies) — hand the
+                # username/password to browser_use's own sensitive_data
+                # mechanism so the agent can fill a login form itself. The
+                # LLM only ever sees the placeholder names below, never the
+                # real values (browser_use substitutes them at the browser
+                # layer), so a stored password never enters the model's
+                # context or gets logged.
+                sensitive_data = {
+                    "x_username": credentials.get("username") or "",
+                    "x_password": credentials.get("password") or "",
+                }
+                login_url = credentials.get("url")
+                login_hint = (
+                    f"First navigate to {login_url} and log in" if login_url else "If a login form appears, log in"
+                )
+                task_description = (
+                    f"{login_hint} using the sensitive_data placeholders x_username and x_password. "
+                    f"Then: {task_description}"
+                )
+
         # Merge manual session_cookies if provided
         if session_cookies and storage_state is None:
             storage_state = {"cookies": session_cookies, "origins": []}
@@ -70,23 +92,32 @@ async def execute_browser_action(
             browser_kwargs["executable_path"] = executable_path
         if storage_state:
             browser_kwargs["storage_state"] = storage_state
-            
+
         browser = Browser(**browser_kwargs)
-            
-        agent = Agent(
-            task=task_description,
-            llm=llm,
-            browser=browser,
-            use_vision=False,
-            llm_timeout=150
-        )
-        
+
+        agent_kwargs = {
+            "task": task_description,
+            "llm": llm,
+            "browser": browser,
+            "use_vision": False,
+            "llm_timeout": 150,
+        }
+        if sensitive_data:
+            agent_kwargs["sensitive_data"] = sensitive_data
+        agent = Agent(**agent_kwargs)
+
         try:
             # max_steps ensures it doesn't loop infinitely if stuck
             history = await agent.run(max_steps=30)
             extracted_text = history.final_result() if hasattr(history, "final_result") else str(history)
-            
-            return {"status": "success", "result": extracted_text}
+            # The agent's own end-of-run self-assessment (True/False once
+            # it calls "done", None if it never did) — the orchestrator
+            # uses this (not just "no exception was raised") to decide
+            # whether this was a real success, e.g. a login wall the agent
+            # gave up on still returns cleanly here with no exception.
+            agent_success = history.is_successful() if hasattr(history, "is_successful") else None
+
+            return {"status": "success", "result": extracted_text, "agent_success": agent_success}
         finally:
             # ALWAYS cleanly kill the browser session when done
             if hasattr(browser, "kill"):

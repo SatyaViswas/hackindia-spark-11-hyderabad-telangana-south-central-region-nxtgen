@@ -9,6 +9,8 @@ import {
   getRequiredAppsStatus,
 } from "../../api/vault";
 import CredentialConnectModal from "../vault/CredentialConnectModal";
+import PortalSessionFormModal from "../vault/PortalSessionFormModal";
+import TelegramLoginModal from "../vault/TelegramLoginModal";
 
 /**
  * Blocks agent creation until every app the blueprint actually needs is
@@ -18,6 +20,18 @@ import CredentialConnectModal from "../vault/CredentialConnectModal";
  * on its first real run, or an event-triggered agent that just never
  * produces anything visible) instead of telling the user up front exactly
  * what to connect.
+ *
+ * `requiredApps` is a list of `{ app, route }` pairs derived straight from
+ * the blueprint's own steps (see AgentStudio.jsx's deriveRequiredApps) —
+ * NOT the planner LLM's freeform `required_apps` field — so an app only
+ * shows up here when a real step actually uses it, and its `route` decides
+ * which connect flow applies: a `composio_api` app goes through Composio's
+ * OAuth/credential flow same as before; a `browser_agent` app instead needs
+ * a saved App Vault session (cookies or a login form), never a Composio
+ * connection — probing Composio for one of those is exactly what used to
+ * either crash (an app Composio doesn't have at all, e.g. "zomato") or
+ * mislead (offering an OAuth "Connect" for an app the workflow never calls
+ * the API of, e.g. a browser_agent-only "Google Slides" step).
  */
 export default function RequiredAppsGate({ requiredApps, userId, onStatusChange }) {
   const { t } = useTranslation();
@@ -26,10 +40,14 @@ export default function RequiredAppsGate({ requiredApps, userId, onStatusChange 
   const [connectingSlug, setConnectingSlug] = useState(null);
   const [connectError, setConnectError] = useState(null);
   const [credentialTarget, setCredentialTarget] = useState(null);
+  const [portalTarget, setPortalTarget] = useState(null);
+  const [telegramTarget, setTelegramTarget] = useState(null);
   const popupRef = useRef(null);
 
-  const names = requiredApps || [];
-  const namesKey = names.join(",");
+  const entries = requiredApps || [];
+  const names = entries.map((a) => (typeof a === "string" ? a : a.app));
+  const routes = entries.map((a) => (typeof a === "string" ? undefined : a.route));
+  const namesKey = entries.map((a) => (typeof a === "string" ? a : `${a.app}:${a.route || ""}`)).join(",");
 
   const refresh = useCallback(() => {
     if (names.length === 0) {
@@ -37,7 +55,7 @@ export default function RequiredAppsGate({ requiredApps, userId, onStatusChange 
       return Promise.resolve();
     }
     setError(null);
-    return getRequiredAppsStatus(userId, names)
+    return getRequiredAppsStatus(userId, names, routes)
       .then((res) => setApps(res?.apps || []))
       .catch((err) => setError(err.message || t("requiredApps.checkFailed")));
   }, [userId, namesKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -158,6 +176,20 @@ export default function RequiredAppsGate({ requiredApps, userId, onStatusChange 
                   >
                     {t("requiredApps.connectInVault")} <ExternalLink size={11} />
                   </Link>
+                ) : a.connect_via === "telegram_bot" ? (
+                  <button
+                    onClick={() => setTelegramTarget({ mode: "bot" })}
+                    className="flex items-center gap-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-[11px] font-medium px-3 py-1.5 transition-colors"
+                  >
+                    {t("requiredApps.connect")}
+                  </button>
+                ) : a.connect_via === "browser_vault" ? (
+                  <button
+                    onClick={() => setPortalTarget({ app: a.app })}
+                    className="flex items-center gap-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-[11px] font-medium px-3 py-1.5 transition-colors"
+                  >
+                    {t("requiredApps.connect")}
+                  </button>
                 ) : (
                   <button
                     onClick={() => handleConnect(a)}
@@ -179,6 +211,26 @@ export default function RequiredAppsGate({ requiredApps, userId, onStatusChange 
         fields={credentialTarget?.fields || []}
         onClose={() => setCredentialTarget(null)}
         onSubmit={handleCredentialSubmit}
+      />
+
+      <PortalSessionFormModal
+        open={!!portalTarget}
+        mode="create"
+        initialName={portalTarget?.app}
+        lockName
+        userId={userId}
+        onClose={() => setPortalTarget(null)}
+        onConnected={refresh}
+      />
+
+      <TelegramLoginModal
+        open={!!telegramTarget}
+        mode={telegramTarget?.mode}
+        onClose={() => setTelegramTarget(null)}
+        onLinked={() => {
+          setTelegramTarget(null);
+          refresh();
+        }}
       />
     </div>
   );

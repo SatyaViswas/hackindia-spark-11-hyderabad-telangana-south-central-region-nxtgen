@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, CheckCircle2, Loader2, Send, X } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
@@ -88,10 +89,10 @@ export default function TelegramLoginModal({ mode, open, onClose, onLinked }) {
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={handleClose} />
-      <div className="relative glass-panel w-full max-w-sm p-6 flex flex-col gap-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={handleClose} />
+      <div className="relative bg-white dark:bg-[#13131a] border border-slate-200 dark:border-white/10 rounded-2xl shadow-xl w-full max-w-sm p-6 flex flex-col gap-4 text-slate-900 dark:text-slate-100">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold">
             {mode === "bot" ? t("vault.telegramModal.connectBotTitle") : t("vault.telegramModal.connectPersonalTitle")}
@@ -105,82 +106,105 @@ export default function TelegramLoginModal({ mode, open, onClose, onLinked }) {
           </button>
         </div>
 
-        {step === "success" ? (
-          <div className="flex flex-col items-center gap-3 py-6">
-            <div className="flex items-center justify-center w-16 h-16 rounded-full bg-emerald-500/10 text-emerald-500">
-              <CheckCircle2 size={32} />
+        {step === "phone" && (
+          <form onSubmit={handlePhoneSubmit} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                {mode === "bot" ? t("vault.telegramModal.botTokenLabel") : t("vault.telegramModal.phoneLabel")}
+              </label>
+              <div className="text-[11px] text-slate-500 dark:text-slate-400 -mt-1 leading-relaxed">
+                {mode === "bot" ? (
+                  <>
+                    {t("vault.telegramModal.botTokenPrefix")}{" "}
+                    <code className="bg-slate-100 dark:bg-white/5 px-1 py-0.5 rounded text-brand-600 dark:text-brand-400 font-mono">
+                      123456:ABC-DEF1234...
+                    </code>
+                    {t("vault.telegramModal.botTokenSuffix")}
+                    <br />
+                    {t("vault.telegramModal.botTokenLine2")}
+                  </>
+                ) : (
+                  t("vault.telegramModal.personalPhoneInstructions")
+                )}
+              </div>
+              <input
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                required
+                type="text"
+                placeholder={mode === "bot" ? t("vault.telegramModal.botTokenPlaceholder") : t("vault.telegramModal.phonePlaceholder")}
+                className="rounded-lg border border-slate-300/70 dark:border-white/15 bg-white/70 dark:bg-black/20 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400/50"
+              />
             </div>
-            <p className="font-medium text-sm">{t("vault.telegramModal.connectedBadge")}</p>
-            <p className="text-xs text-slate-500 dark:text-slate-400 text-center">
-              {t("vault.telegramModal.linkedDesc")}
-            </p>
-          </div>
-        ) : step === "phone" ? (
-          <form onSubmit={handlePhoneSubmit} className="flex flex-col gap-3">
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {mode === "bot" ? (
-                <>
-                  {t("vault.telegramModal.botTokenPrefix")}{" "}
-                  <span className="font-mono text-slate-400">123456:ABC-DEF1234ghIkl</span>
-                  {t("vault.telegramModal.botTokenSuffix")}<br/>
-                  {t("vault.telegramModal.botTokenLine2")}
-                </>
-              ) : (
-                <>
-                  {t("vault.telegramModal.personalPhoneInstructions")}
-                </>
-              )}
-            </p>
-            <input
-              value={phoneNumber}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              type="text"
-              required
-              autoFocus
-              placeholder={mode === "bot" ? t("vault.telegramModal.botTokenPlaceholder") : t("vault.telegramModal.phonePlaceholder")}
-              className="rounded-lg border border-slate-300/70 dark:border-white/15 bg-white/70 dark:bg-black/20 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400/50"
-            />
             {error && <ErrorNote message={error} />}
             <SubmitButton submitting={submitting} label={t("vault.telegramModal.continueBtn")} />
           </form>
-        ) : step === "code" ? (
-          <form onSubmit={handleCodeSubmit} className="flex flex-col gap-3">
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {t("vault.telegramModal.codeInstructions", { phone: phoneNumber })}
-            </p>
-            <input
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              type="text"
-              inputMode="numeric"
-              required
-              autoFocus
-              placeholder={t("vault.telegramModal.codePlaceholder")}
-              className="rounded-lg border border-slate-300/70 dark:border-white/15 bg-white/70 dark:bg-black/20 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400/50"
-            />
+        )}
+
+        {step === "code" && (
+          <form onSubmit={handleCodeSubmit} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600 dark:text-slate-300">{t("vault.telegramModal.codeLabel")}</label>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 -mt-1 leading-relaxed">
+                {t("vault.telegramModal.codeInstructions", { phone: phoneNumber })}
+              </p>
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                required
+                type="text"
+                placeholder={t("vault.telegramModal.codePlaceholder")}
+                className="rounded-lg border border-slate-300/70 dark:border-white/15 bg-white/70 dark:bg-black/20 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400/50"
+              />
+            </div>
             {error && <ErrorNote message={error} />}
             <SubmitButton submitting={submitting} label={t("vault.telegramModal.confirmCodeBtn")} />
           </form>
-        ) : (
-          <form onSubmit={handlePasswordSubmit} className="flex flex-col gap-3">
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              {t("vault.telegramModal.passwordInstructions")}
-            </p>
-            <input
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              type="password"
-              required
-              autoFocus
-              placeholder={t("vault.telegramModal.passwordPlaceholder")}
-              className="rounded-lg border border-slate-300/70 dark:border-white/15 bg-white/70 dark:bg-black/20 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400/50"
-            />
+        )}
+
+        {step === "password" && (
+          <form onSubmit={handlePasswordSubmit} className="flex flex-col gap-4">
+            <div className="flex flex-col gap-1.5">
+              <label className="text-xs font-medium text-slate-600 dark:text-slate-300">{t("vault.telegramModal.passwordLabel")}</label>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400 -mt-1 leading-relaxed">
+                {t("vault.telegramModal.passwordInstructions")}
+              </p>
+              <input
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                type="password"
+                placeholder={t("vault.telegramModal.passwordPlaceholder")}
+                className="rounded-lg border border-slate-300/70 dark:border-white/15 bg-white/70 dark:bg-black/20 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-400/50"
+              />
+            </div>
             {error && <ErrorNote message={error} />}
             <SubmitButton submitting={submitting} label={t("vault.telegramModal.confirmPasswordBtn")} />
           </form>
         )}
+
+        {step === "success" && (
+          <div className="flex flex-col items-center justify-center text-center py-6 gap-3 animate-fade-in">
+            <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 size={24} />
+            </div>
+            <div className="space-y-1">
+              <p className="font-semibold text-slate-900 dark:text-white">{t("vault.telegramModal.connectedTitle")}</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-[240px] leading-relaxed">
+                {t("vault.telegramModal.linkedDesc")}
+              </p>
+            </div>
+            <button
+              onClick={handleClose}
+              className="mt-2 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-white/5 dark:hover:bg-white/10 text-slate-700 dark:text-slate-300 text-xs font-medium px-4 py-2 transition-colors"
+            >
+              {t("common.done")}
+            </button>
+          </div>
+        )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 

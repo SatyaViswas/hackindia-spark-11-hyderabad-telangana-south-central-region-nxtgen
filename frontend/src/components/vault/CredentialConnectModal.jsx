@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, KeyRound, Loader2, X } from "lucide-react";
 
@@ -28,10 +29,10 @@ export default function CredentialConnectModal({ app, fields, authScheme, onClos
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <form onSubmit={handleSubmit} className="relative glass-panel w-full max-w-md p-6 flex flex-col gap-4">
+  return createPortal(
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
+      <form onSubmit={handleSubmit} className="relative bg-white dark:bg-[#13131a] border border-slate-200 dark:border-white/10 rounded-2xl shadow-xl w-full max-w-md p-6 flex flex-col gap-4 text-slate-900 dark:text-slate-100">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold">{t("vault.credentialModal.connectTitle", { name: app.name })}</h2>
           <button
@@ -90,6 +91,7 @@ export default function CredentialConnectModal({ app, fields, authScheme, onClos
           {saving ? t("vault.credentialModal.connecting") : t("vault.credentialModal.connectTitle", { name: app.name })}
         </button>
       </form>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -278,6 +278,50 @@ def _looks_like_clarification_request(text) -> bool:
     return any(hint in lowered for hint in _CLARIFICATION_HINTS)
 
 
+# A browser_agent step that self-reports failure (agent_success is False —
+# see browser_engine.execute_browser_action) but ISN'T a clarifying question
+# is often a login wall — the acting LLM declares it can't proceed rather
+# than asking anything ("I do not have access to your Google account
+# credentials"), which _looks_like_clarification_request never catches since
+# that text neither ends in "?" nor matches any of its hint phrases. Checked
+# separately so this case pauses for a *reconnect* (see reconnect_app below)
+# rather than either a generic text-answer pause or silently reporting
+# "success" with the failure text passed downstream as if it were data.
+_AUTH_REQUIRED_HINTS = (
+    "sign in",
+    "sign-in",
+    "log in",
+    "logged in",
+    "login required",
+    "login page",
+    "requires authentication",
+    "requires you to be signed in",
+    "requires login",
+    "not logged in",
+    "requires a login",
+    "don't have access to your",
+    "do not have access to your",
+    "no access to your",
+    "need your login",
+    "need you to log in",
+    "requires credentials",
+    "enter your password",
+    "enter your username",
+    "redirected to the sign",
+    "redirected to a sign",
+    "redirected to the login",
+)
+
+
+def _looks_like_auth_required_text(text) -> bool:
+    if not isinstance(text, str):
+        return False
+    lowered = text.strip().lower()
+    if not lowered:
+        return False
+    return any(hint in lowered for hint in _AUTH_REQUIRED_HINTS)
+
+
 async def _load_agent_blueprint(agent_id: str):
     agent_response = supabase.table("agents").select("*").eq("id", agent_id).execute()
     if not agent_response.data:
@@ -445,15 +489,51 @@ async def _run_action_and_classify(agent_id, user_id, blueprint, steps, index, s
     # style replies. Either source pauses the run the same way.
     explicit_question = result_data.get("question") if result_data.get("status") == "needs_input" else None
     extracted_value = None if (is_error or explicit_question) else _extract_result_value(result_data)
-    question = explicit_question or (
-        extracted_value.strip()
-        if not is_error and route == "browser_agent" and _looks_like_clarification_request(extracted_value)
-        else None
+
+    # A browser_agent step whose own run the agent self-reported as
+    # unsuccessful (see browser_engine.execute_browser_action's
+    # "agent_success") never reaches here as "error" (agent.run() didn't
+    # raise) and usually isn't phrased as a question either — without this,
+    # it falls straight through to the unconditional "success" return below,
+    # exactly the "workflow says success but it actually hit a login wall"
+    # bug. Split into two outcomes: a recognizable login/auth wall pauses
+    # for the user to connect credentials; anything else is a genuine
+    # failure and should halt the run with a real error, not report success.
+    browser_agent_failed = (
+        not is_error
+        and not explicit_question
+        and route == "browser_agent"
+        and result_data.get("agent_success") is False
     )
+    auth_required_app = (
+        app if browser_agent_failed and _looks_like_auth_required_text(extracted_value) else None
+    )
+
+    question = explicit_question or (
+        f"{app} requires you to be signed in for this automation to continue. "
+        f"Connect it in App Vault with your login details, then answer here (anything) to retry."
+        if auth_required_app
+        else (
+            extracted_value.strip()
+            if not is_error and route == "browser_agent" and _looks_like_clarification_request(extracted_value)
+            else None
+        )
+    )
+    if auth_required_app:
+        result_data["reconnect_app"] = auth_required_app
 
     if question:
         result_data["failure_class"] = classify_failure(result_data, caught_exception, route=route).value
         return "needs_input", result_data, extracted_value, question
+
+    if browser_agent_failed and not auth_required_app:
+        # Not a login wall and not a clarifying question — the agent tried
+        # and gave up (e.g. the site genuinely can't be automated this way).
+        # Surface it as a real failure instead of silently succeeding.
+        result_data["status"] = "error"
+        result_data.setdefault("error", extracted_value or "Browser agent could not complete this task.")
+        is_error = True
+
     if is_error:
         result_data["failure_class"] = classify_failure(result_data, caught_exception, route=route).value
         return "failed", result_data, extracted_value, None
@@ -513,6 +593,12 @@ async def _run_single_step(agent_id, user_id, blueprint, steps, index, step_numb
                 # — resume doesn't need the answer to go anywhere specific,
                 # just to retry once the user has reconnected it elsewhere.
                 "reconnect_app": reconnect_app,
+                # Which connect flow the paused reconnect should use — a
+                # composio_api reconnect (Composio OAuth expired/disconnected)
+                # is a different fix than a browser_agent reconnect (a saved
+                # App Vault session expired) even though both set
+                # reconnect_app; see PendingActionCard.jsx.
+                "reconnect_route": route if reconnect_app else None,
                 "trigger_type": _current_trigger_type.get(),
             },
         )
@@ -585,6 +671,7 @@ async def _run_for_each_items(agent_id, user_id, blueprint, steps, index, step_n
                     "paused_index": index,
                     "missing_field": missing_field,
                     "reconnect_app": reconnect_app,
+                    "reconnect_route": route if reconnect_app else None,
                     # The missing value (e.g. a spreadsheet name) almost
                     # always applies to the whole batch, not just this one
                     # item — on resume it gets baked into the step's own

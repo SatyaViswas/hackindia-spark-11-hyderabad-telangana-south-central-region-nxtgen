@@ -32,6 +32,36 @@ function cloneBlueprint(blueprint) {
   return typeof structuredClone === "function" ? structuredClone(blueprint) : JSON.parse(JSON.stringify(blueprint));
 }
 
+// Apps a step route actually needs a connection for — matches
+// planner.py's _CONNECTABLE_ROUTES exactly. 'ai_generate' runs on
+// VoxAgent's own built-in AI and 'http_webhook' targets a plain URL, not a
+// connectable app.
+const CONNECTABLE_ROUTES = new Set(["composio_api", "browser_agent", "telegram_client"]);
+
+// Required-apps list for RequiredAppsGate, derived straight from the
+// blueprint's own steps (+ an event trigger's watched app) instead of
+// trusting the planner LLM's freeform `required_apps` field — it can never
+// drift from what the workflow actually runs, and it carries each app's
+// route so the gate can tell a browser-session app (needs a saved App
+// Vault session) apart from a Composio API app (needs an OAuth/credential
+// connection) instead of treating every entry as the latter.
+function deriveRequiredApps(blueprint) {
+  if (!blueprint) return [];
+  const byApp = new Map();
+  (blueprint.steps || []).forEach((step) => {
+    const app = step?.app;
+    const route = step?.route;
+    if (!app || typeof app !== "string" || app.includes("{") || app.includes("}")) return;
+    if (!CONNECTABLE_ROUTES.has(route)) return;
+    if (!byApp.has(app)) byApp.set(app, route);
+  });
+  const trigger = blueprint.trigger;
+  if (trigger?.type === "webhook" && trigger.event_app && !trigger.event_app.includes("{")) {
+    if (!byApp.has(trigger.event_app)) byApp.set(trigger.event_app, "composio_api");
+  }
+  return Array.from(byApp.entries()).map(([app, route]) => ({ app, route }));
+}
+
 function needsAttention(blueprint) {
   if (!blueprint) return false;
   return (
@@ -162,6 +192,7 @@ export default function AgentStudio() {
           id: entry.id,
           question: entry.question,
           reconnectApp: entry.reconnect_app,
+          reconnectRoute: entry.reconnect_route,
           inputType: entry.input_type,
         });
       }
@@ -652,7 +683,7 @@ export default function AgentStudio() {
 
       {blueprint && !agentId && (
         <RequiredAppsGate
-          requiredApps={blueprint.required_apps}
+          requiredApps={deriveRequiredApps(blueprint)}
           userId={userId}
           onStatusChange={setRequiredAppsConnected}
         />
@@ -663,6 +694,8 @@ export default function AgentStudio() {
           question={liveClarification.question}
           inputType={liveClarification.inputType}
           reconnectApp={liveClarification.reconnectApp}
+          reconnectRoute={liveClarification.reconnectRoute}
+          userId={userId}
           onResume={handleResume}
           onApprove={handleApprove}
           onReject={handleReject}

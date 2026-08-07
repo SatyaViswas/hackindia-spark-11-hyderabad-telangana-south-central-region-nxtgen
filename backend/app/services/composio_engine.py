@@ -24,6 +24,22 @@ async def _execute_composio_with_timeout(*args, **kwargs):
         timeout=120
     )
 
+
+def toolkit_exists(app_slug: str) -> bool:
+    """Whether `app_slug` is a real Composio toolkit at all — as opposed to
+    an app name the planner or user typed that Composio simply doesn't have
+    (e.g. "zomato"). Used to decide, at plan time, whether a step can
+    actually use the 'composio_api' route or must fall back to
+    'browser_agent' — and to avoid ever offering a Composio "Connect"
+    button for an app that can only 500 when clicked."""
+    if not composio:
+        return False
+    try:
+        composio.toolkits.get(slug=app_slug)
+        return True
+    except Exception:
+        return False
+
 # A separate, minimal Gemini client used only to disambiguate a guessed
 # action slug against a shortlist of an app's real tools (see
 # _pick_best_action_via_ai) — kept local to this module rather than shared
@@ -322,7 +338,7 @@ def _resolve_action_slug(app: str, action_name: str) -> str:
         _resolved_action_cache[action_name] = action_name
         return action_name
 
-    toolkit_slug = _slugify_app(app)
+    toolkit_slug = slugify_app_name(app)
     search_words = action_name.replace("_", " ").strip()
     try:
         candidates = composio.tools.get_raw_composio_tools(toolkits=[toolkit_slug], search=search_words, limit=8)
@@ -594,7 +610,12 @@ def _candidate_user_ids(user_id: str) -> list:
     return candidates or ["default"]
 
 
-def _slugify_app(app: str) -> str:
+def slugify_app_name(app: str) -> str:
+    """Composio toolkit slug for a plain app display name — strip
+    everything but alphanumerics, matching Composio's own slug convention.
+    The single shared implementation (previously duplicated three ways:
+    here, plus vault.py's `_slugify_app` and execution.py's `_slugify_app`,
+    both now importing this one instead)."""
     return "".join(ch for ch in (app or "").lower() if ch.isalnum())
 
 
@@ -854,7 +875,7 @@ async def _auto_resolve_missing_ids(app: str, action_name: str, parameters: dict
     if not target_field:
         return parameters, None
 
-    toolkit_slug = _slugify_app(app)
+    toolkit_slug = slugify_app_name(app)
     search_tool = _find_search_tool(toolkit_slug)
     if not search_tool or not composio:
         return parameters, None
@@ -1045,7 +1066,7 @@ def resolve_connected_user_id(user_id: str, app: str) -> str:
     if not composio or len(candidates) == 1:
         return candidates[0]
 
-    slug = _slugify_app(app)
+    slug = slugify_app_name(app)
     for candidate in candidates:
         try:
             accounts = composio.connected_accounts.list(
@@ -1182,7 +1203,7 @@ async def _enrich_thin_composio_result(app: str, action_name: str, output: dict,
         schema = _get_action_schema(action_name)
         field_description = ((schema or {}).get("properties") or {}).get(field_name, {}).get("description")
 
-        toolkit_slug = _slugify_app(app)
+        toolkit_slug = slugify_app_name(app)
         resolved = _resolve_detail_action(toolkit_slug, action_name, field_name, field_description)
         if not resolved:
             return output
@@ -1471,7 +1492,14 @@ def get_toolkit_connect_requirements(app_slug: str) -> dict:
     if not composio:
         raise Exception("Composio client not initialized")
 
-    toolkit = composio.toolkits.get(slug=app_slug)
+    try:
+        toolkit = composio.toolkits.get(slug=app_slug)
+    except Exception:
+        # Not a real Composio toolkit at all (e.g. "zomato") — raise a
+        # clean, expected error instead of letting the SDK's raw exception
+        # propagate as an opaque 500 (see routers/vault.py's
+        # get_connect_requirements, which maps this to a 404).
+        raise ValueError(f"'{app_slug}' isn't available as a Composio-connectable app.")
     if list(getattr(toolkit, "composio_managed_auth_schemes", None) or []):
         return {"mode": "oauth", "auth_scheme": None, "fields": []}
 

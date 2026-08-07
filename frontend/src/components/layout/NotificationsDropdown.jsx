@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Bell } from "lucide-react";
 import { approvePendingAction, getPausedRuns, rejectPendingAction, resumeAgent } from "../../api/agents";
+import { useAuth } from "../../context/AuthContext";
 import PendingActionCard from "../studio/PendingActionCard";
 
 // The Action Center — every pending action a background (scheduled or
@@ -10,6 +11,7 @@ import PendingActionCard from "../studio/PendingActionCard";
 // for a live in-Studio pause, instead of a bespoke free-text-only form.
 export default function NotificationsDropdown() {
   const { t } = useTranslation();
+  const { userId } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [busyId, setBusyId] = useState(null);
@@ -96,6 +98,8 @@ export default function NotificationsDropdown() {
                   question={notif.question}
                   inputType={notif.input_type}
                   reconnectApp={notif.reconnect_app}
+                  reconnectRoute={notif.reconnect_route}
+                  userId={userId}
                   busy={busyId === notif.id}
                   error={errors[notif.id]}
                   onResume={(answer) => handleResume(notif, answer)}

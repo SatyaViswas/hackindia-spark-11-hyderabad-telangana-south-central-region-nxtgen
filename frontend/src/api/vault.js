@@ -12,8 +12,10 @@ export function getComposioConnections(userId) {
   return apiClient.get("/vault/composio-connections", { params: { user_id: userId } });
 }
 
-export function getRequiredAppsStatus(userId, appNames) {
-  return apiClient.get("/vault/required-apps-status", { params: { user_id: userId, apps: appNames.join(",") } });
+export function getRequiredAppsStatus(userId, appNames, routes) {
+  const params = { user_id: userId, apps: appNames.join(",") };
+  if (routes) params.routes = routes.join(",");
+  return apiClient.get("/vault/required-apps-status", { params });
 }
 
 export function disconnectComposioAccount(connectedAccountId) {
@@ -59,6 +61,18 @@ export function pollWhatsAppQrSession(sessionId) {
 
 export function cancelWhatsAppQrSession(sessionId) {
   return apiClient.delete(`/vault/whatsapp/qr/${sessionId}`);
+}
+
+export function startBrowserLogin({ userId, appName, loginUrl }) {
+  return apiClient.post("/vault/browser-login/start", { user_id: userId, app_name: appName, login_url: loginUrl });
+}
+
+export function captureBrowserLogin(sessionId) {
+  return apiClient.post(`/vault/browser-login/${sessionId}/capture`);
+}
+
+export function cancelBrowserLogin(sessionId) {
+  return apiClient.delete(`/vault/browser-login/${sessionId}`);
 }
 
 export function startTelegramLogin(userId, phoneNumber) {

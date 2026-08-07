@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Check, ExternalLink, Loader2, Send, X } from "lucide-react";
 import { Link } from "react-router-dom";
+import PortalSessionFormModal from "../vault/PortalSessionFormModal";
 
 // The sensitive-action approval gate's question (see orchestrator.py's
 // SENSITIVE_ACTIONS check) embeds a formatted ```json block of the
@@ -27,6 +28,8 @@ export default function PendingActionCard({
   question,
   inputType = "text",
   reconnectApp,
+  reconnectRoute,
+  userId,
   options,
   busy,
   error,
@@ -36,6 +39,7 @@ export default function PendingActionCard({
 }) {
   const { t } = useTranslation();
   const [answer, setAnswer] = useState("");
+  const [browserLoginOpen, setBrowserLoginOpen] = useState(false);
   const { text, json } = splitJsonPreview(question);
 
   const handleSubmit = (e) => {
@@ -63,10 +67,52 @@ export default function PendingActionCard({
         </div>
       )}
 
-      {reconnectApp ? (
-        // A reconnect-type pause (see composio_engine.execute_composio_action)
-        // doesn't need a real answer to resolve — retrying after the app is
-        // reconnected elsewhere (App Vault) is what actually fixes it.
+      {reconnectApp && reconnectRoute === "browser_agent" ? (
+        // A browser_agent app's stored session expired mid-run (see
+        // orchestrator.py's auth-required detection) — reconnecting means
+        // logging in again in a real browser window (see
+        // browser_login_engine.py), same one-click flow as the initial
+        // connect. Retrying is folded into the connect flow itself
+        // (PortalSessionFormModal's onConnected below) instead of a
+        // separate "I've reconnected" click.
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setBrowserLoginOpen(true)}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-40 text-white text-sm font-medium px-4 py-2 transition-colors"
+            >
+              {busy ? <Loader2 size={14} className="animate-spin" /> : null}
+              {t("pendingAction.connectAppInVault", { app: reconnectApp })}
+            </button>
+            <button
+              type="button"
+              onClick={onReject}
+              disabled={busy}
+              className="flex items-center gap-1.5 rounded-lg border border-red-400/50 hover:bg-red-400/10 disabled:opacity-40 text-red-600 dark:text-red-400 text-sm font-medium px-4 py-2 transition-colors ml-auto"
+            >
+              <X size={14} /> {t("common.cancel")}
+            </button>
+          </div>
+          <PortalSessionFormModal
+            open={browserLoginOpen}
+            mode="create"
+            initialName={reconnectApp}
+            lockName
+            userId={userId}
+            onClose={() => setBrowserLoginOpen(false)}
+            onConnected={() => {
+              setBrowserLoginOpen(false);
+              onResume("reconnected");
+            }}
+          />
+        </>
+      ) : reconnectApp ? (
+        // A composio_api app's connection expired/was disconnected mid-run
+        // (see composio_engine.execute_composio_action) — that's a
+        // Composio OAuth/credential reconnect, done from the App Vault
+        // page, not the browser-login flow above.
         <div className="flex items-center gap-2 flex-wrap">
           <Link
             to="/vault"

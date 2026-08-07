@@ -152,7 +152,16 @@ def classify_failure(
         # SelectorMutator can act on it); every other route gets
         # AMBIGUOUS_INTENT (straight to a human, same as orchestrator's
         # existing behavior, no mutator currently attempts these).
-        if _looks_like_clarification_text(_extract_text_value(result_data)):
+        # result_data.get("agent_success") is False: the browser_agent's own
+        # end-of-run self-assessment (see browser_engine.execute_browser_action)
+        # says it did NOT succeed, even though no exception was raised and
+        # the text doesn't read as a clarifying question either (e.g. a
+        # declarative "I don't have access to your credentials" login-wall
+        # message). Treated the same as a clarification-shaped reply so it
+        # still gets one SelectorMutator retry attempt before
+        # orchestrator._run_action_and_classify makes the final call
+        # (pause for reconnect, or a real failure) on whatever comes back.
+        if result_data.get("agent_success") is False or _looks_like_clarification_text(_extract_text_value(result_data)):
             return FailureClass.SELECTOR_DRIFT if route == "browser_agent" else FailureClass.AMBIGUOUS_INTENT
         return None
 

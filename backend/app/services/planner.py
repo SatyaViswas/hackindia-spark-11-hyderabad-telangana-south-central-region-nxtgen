@@ -81,6 +81,56 @@ Output exactly in the following JSON schema format:
 {schema_json}
 """
 
+# Routes whose `app` names something a real user might connect (an app the
+# Required Apps gate should offer a connect flow for). 'ai_generate' runs on
+# VoxAgent's own built-in AI (see the 'ai_generate' rule above) and
+# 'http_webhook' targets a plain URL, not a connectable app — neither needs
+# an entry here even when they appear alongside connectable steps.
+_CONNECTABLE_ROUTES = {"composio_api", "browser_agent", "telegram_client"}
+
+
+def _apply_route_fallback_and_required_apps(parsed_json: dict) -> None:
+    """Two fixes applied to the raw planner output before validation:
+
+    1. A 'composio_api' step whose app isn't an actual Composio toolkit
+       (e.g. the user named an app like "Zomato" that Composio doesn't
+       have) is switched to 'browser_agent' in place — the same fallback a
+       human would reach for, decided at plan time so the Required Apps
+       gate never offers a Composio "Connect" button that can only 500.
+    2. `required_apps` is recomputed from the (possibly just-fixed) `steps`
+       + trigger, instead of trusting whatever freeform list the LLM wrote
+       alongside them — this is the single source of truth from here on,
+       so it can't drift from what the steps actually use (an app the LLM
+       mentioned but no step references, or a step's app the LLM forgot to
+       list, both self-correct here).
+    """
+    from app.services.composio_engine import slugify_app_name, toolkit_exists
+
+    steps = parsed_json.get("steps") or []
+    required = []
+    seen = set()
+
+    def _add(name):
+        if name and name not in seen and not (isinstance(name, str) and ("{" in name or "}" in name)):
+            seen.add(name)
+            required.append(name)
+
+    for step in steps:
+        app = step.get("app")
+        route = step.get("route")
+        if route == "composio_api" and app and not toolkit_exists(slugify_app_name(app)):
+            step["route"] = "browser_agent"
+            route = "browser_agent"
+        if route in _CONNECTABLE_ROUTES:
+            _add(app)
+
+    trigger = parsed_json.get("trigger") or {}
+    if trigger.get("type") == "webhook":
+        _add(trigger.get("event_app"))
+
+    parsed_json["required_apps"] = required
+
+
 def generate_blueprint(prompt: str) -> WorkflowBlueprint:
     if not client:
         raise ValueError("GEMINI_API_KEY is not configured.")
@@ -110,14 +160,22 @@ def generate_blueprint(prompt: str) -> WorkflowBlueprint:
         
     try:
         parsed_json = json.loads(raw_text)
-        
+
         # Gracefully handle missing field edge cases
         if "missing_parameters" not in parsed_json:
             parsed_json["missing_parameters"] = []
-            
+
         if parsed_json.get("needs_clarification") and not parsed_json.get("clarification_question"):
             parsed_json["clarification_question"] = "Please provide more details to proceed."
-            
+
+        try:
+            _apply_route_fallback_and_required_apps(parsed_json)
+        except Exception as _route_err:
+            # Best-effort — a Composio catalog hiccup here shouldn't block
+            # blueprint generation; the LLM's own required_apps/route guess
+            # is used as a fallback, same as before this pass existed.
+            print(f"[planner] route fallback/required_apps derivation skipped: {_route_err}")
+
         return WorkflowBlueprint.model_validate(parsed_json)
     except Exception as e:
         raise ValueError(f"Failed to parse Gemini response into WorkflowBlueprint. Error: {e}. Raw response: {raw_text}")

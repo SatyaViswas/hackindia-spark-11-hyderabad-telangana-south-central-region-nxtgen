@@ -16,11 +16,17 @@ from app.services.composio_engine import (
     get_toolkit_connect_requirements,
     list_composio_apps,
     list_composio_connected_accounts,
+    slugify_app_name,
 )
 from app.services.whatsapp_engine import (
     start_whatsapp_qr_session,
     poll_whatsapp_qr_session,
     cancel_whatsapp_qr_session,
+)
+from app.services.browser_login_engine import (
+    start_browser_login_session,
+    capture_browser_login_session,
+    cancel_browser_login_session,
 )
 from app.services import telegram_client_engine
 from app.services.telegram_client_engine import TELEGRAM_PERSONAL_APP_NAME, TELEGRAM_BOT_APP_NAME
@@ -66,14 +72,16 @@ async def get_composio_connections(user_id: str = Query("00000000-0000-0000-0000
 _BUILTIN_APPS = {"voxagent ai", "voxagent vault notes"}
 
 
-def _slugify_app(app: str) -> str:
-    return "".join(ch for ch in (app or "").lower() if ch.isalnum())
-
-
 @router.get("/vault/required-apps-status")
 async def required_apps_status(
     apps: str = Query(..., description="Comma-separated app display names, e.g. a blueprint's required_apps"),
     user_id: str = Query("00000000-0000-0000-0000-000000000000"),
+    routes: Optional[str] = Query(
+        None,
+        description="Comma-separated route per app, positionally paired with `apps` "
+        "(e.g. 'composio_api,browser_agent'). An app whose route is 'browser_agent' is "
+        "checked against the local App Vault session store instead of Composio.",
+    ),
 ):
     """Tells the caller, for a whole blueprint's required_apps list at once,
     which apps are already usable and which still need connecting — lets
@@ -81,27 +89,47 @@ async def required_apps_status(
     that's silently broken until a step fails (or, for an event-triggered
     agent, until a real event happens and nothing visibly comes of it)."""
     names = [a.strip() for a in (apps or "").split(",") if a.strip()]
+    route_list = [r.strip() for r in (routes or "").split(",")] if routes else []
     connected_slugs = {c["slug"] for c in list_composio_connected_accounts(user_id)}
+    user_apps = list_user_apps(user_id)
+    vault_connected_names = {
+        (a.get("app_name") or "").strip().lower() for a in user_apps if a.get("status") == "active"
+    }
     telegram_personal_connected = any(
         (a.get("app_name") or "").strip().lower() == TELEGRAM_PERSONAL_APP_NAME.lower() and a.get("status") == "active"
-        for a in list_user_apps(user_id)
+        for a in user_apps
     )
     telegram_bot_connected = any(
         (a.get("app_name") or "").strip().lower() == TELEGRAM_BOT_APP_NAME.lower() and a.get("status") == "active"
-        for a in list_user_apps(user_id)
+        for a in user_apps
     )
 
     results = []
-    for name in names:
+    for i, name in enumerate(names):
         lowered = name.lower()
+        route = route_list[i] if i < len(route_list) else None
         if lowered in _BUILTIN_APPS:
             results.append({"app": name, "connected": True, "builtin": True})
         elif lowered == TELEGRAM_PERSONAL_APP_NAME.lower():
             results.append({"app": name, "connected": telegram_personal_connected, "connect_via": "telegram_personal"})
         elif lowered == TELEGRAM_BOT_APP_NAME.lower():
             results.append({"app": name, "connected": telegram_bot_connected, "connect_via": "telegram_bot"})
+        elif route == "browser_agent":
+            # A browser_agent step's "app" needs a saved App Vault session
+            # (cookies, or a username/password portal login — see
+            # PortalSessionFormModal / browser_engine.execute_browser_action),
+            # never a Composio connection — checking Composio here is exactly
+            # what used to 500 for an app Composio doesn't have at all
+            # (e.g. "zomato") and misleadingly offer an OAuth "Connect"
+            # button for one it does (e.g. "Google Slides") when the
+            # workflow never actually calls its API.
+            results.append({
+                "app": name,
+                "connected": lowered in vault_connected_names,
+                "connect_via": "browser_vault",
+            })
         else:
-            slug = _slugify_app(name)
+            slug = slugify_app_name(name)
             connected = slug in connected_slugs
             no_auth = False
             if not connected:
@@ -222,6 +250,11 @@ async def get_connect_requirements(app_slug: str = Query(...)):
     e.g. Telegram has no Composio-managed OAuth at all."""
     try:
         return {"status": "success", **get_toolkit_connect_requirements(app_slug)}
+    except ValueError as e:
+        # Not a real Composio toolkit (e.g. an app the planner routed to
+        # browser_agent, or a typo'd/unsupported name) — a clean, expected
+        # 404 instead of a scary 500.
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -273,6 +306,41 @@ async def cancel_whatsapp_qr(session_id: str):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class BrowserLoginStartRequest(BaseModel):
+    user_id: str = "00000000-0000-0000-0000-000000000000"
+    app_name: str
+    login_url: Optional[str] = None
+
+
+@router.post("/vault/browser-login/start")
+async def start_browser_login(request: BrowserLoginStartRequest):
+    """Opens a real, visible Chromium window for the user to log into
+    `app_name` themselves — no password ever passed through VoxAgent. See
+    browser_login_engine.py: the window stays open until the frontend calls
+    the capture or cancel endpoint below."""
+    try:
+        return await start_browser_login_session(request.user_id, request.app_name, request.login_url)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/vault/browser-login/{session_id}/capture")
+async def capture_browser_login(session_id: str):
+    """Called once the user confirms they've finished logging in — reads
+    the browser's cookies and stores them, then closes the window."""
+    result = await capture_browser_login_session(session_id)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    return {"status": "success", **{k: v for k, v in result.items() if k != "status"}}
+
+
+@router.delete("/vault/browser-login/{session_id}")
+async def cancel_browser_login(session_id: str):
+    await cancel_browser_login_session(session_id)
+    return {"status": "success"}
 
 
 class TelegramLoginStartRequest(BaseModel):

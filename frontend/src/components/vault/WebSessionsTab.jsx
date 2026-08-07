@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertCircle, Globe, Loader2, Pencil, Plus, QrCode, Send, Trash2 } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
-import { disconnectApp, getVaultApps, saveSession } from "../../api/vault";
+import { disconnectApp, getVaultApps } from "../../api/vault";
 import WhatsAppQrModal from "./WhatsAppQrModal";
 import TelegramLoginModal from "./TelegramLoginModal";
 import PortalSessionFormModal from "./PortalSessionFormModal";
@@ -60,17 +60,6 @@ export default function WebSessionsTab() {
     } else {
       setFormState({ mode: "edit", name: session.app_name });
     }
-  };
-
-  const handleSubmitPortal = async ({ name, url, username, password }) => {
-    await saveSession({
-      userId,
-      appName: name,
-      authType: "session_cookie",
-      credentials: { url, username, password },
-    });
-    setFormState(null);
-    fetchSessions();
   };
 
   return (
@@ -179,8 +168,10 @@ export default function WebSessionsTab() {
         open={!!formState}
         mode={formState?.mode}
         initialName={formState?.name}
+        lockName={formState?.mode === "edit"}
+        userId={userId}
         onClose={() => setFormState(null)}
-        onSubmit={handleSubmitPortal}
+        onConnected={fetchSessions}
       />
     </div>
   );

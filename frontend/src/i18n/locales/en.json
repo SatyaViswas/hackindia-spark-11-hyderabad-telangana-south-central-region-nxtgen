@@ -389,7 +389,18 @@
       "passwordPlaceholder": "••••••••",
       "saveFailed": "Failed to save portal session.",
       "saving": "Saving…",
-      "save": "Save Portal Session"
+      "save": "Save Portal Session",
+      "browserLoginIntro": "VoxAgent opens a real browser window for you to log in — your password is never typed into VoxAgent itself.",
+      "browserLoginButton": "Log In in a Browser Window",
+      "browserLoginStarting": "Opening browser…",
+      "browserLoginWaitingTitle": "Waiting for you to log in…",
+      "browserLoginWaitingBody": "A browser window has opened for {{app}}. Log in normally, then come back here and click Done.",
+      "browserLoginDone": "Done, I've Logged In",
+      "browserLoginCancel": "Cancel",
+      "browserLoginCapturing": "Saving your session…",
+      "browserLoginStartFailed": "Couldn't open the browser window. Try again.",
+      "browserLoginCaptureFailed": "Couldn't save your session — make sure you're fully logged in, then click Done again.",
+      "advancedToggle": "Advanced: use username & password instead"
     },
     "appIcon": {
       "logoAlt": "{{name}} logo"

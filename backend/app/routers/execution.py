@@ -8,7 +8,7 @@ from typing import Dict, Any, Optional, Literal
 from app.services.orchestrator import run_agent_workflow, resume_agent_workflow, reject_paused_run, has_paused_run
 from app.services import pending_actions
 from app.services.telemetry import telemetry_manager
-from app.services.composio_engine import generate_sample_trigger_payload
+from app.services.composio_engine import generate_sample_trigger_payload, slugify_app_name
 from app.services import trigger_engine, telegram_client_engine
 from app.services.telegram_client_engine import TELEGRAM_PERSONAL_APP_NAME, TELEGRAM_BOT_APP_NAME
 from app.services.scheduler import add_or_update_job, remove_job
@@ -32,6 +32,7 @@ async def get_paused_runs(x_user_id: Optional[str] = Header(default=None)):
                 "question": row["question"],
                 "input_type": row.get("input_type"),
                 "reconnect_app": (row.get("context_snapshot") or {}).get("reconnect_app"),
+                "reconnect_route": (row.get("context_snapshot") or {}).get("reconnect_route"),
                 "missing_field": (row.get("context_snapshot") or {}).get("missing_field"),
                 "agent_id": row["agent_id"],
             }
@@ -43,13 +44,14 @@ logger = logging.getLogger(__name__)
 
 TriggerType = Literal["on_demand", "scheduled", "event_trigger"]
 
-# _slugify_app("Telegram Personal Account") — the trigger.event_app value
-# planner.py uses for "my telegram"/"saved messages" style automations,
-# which listen via telegram_client_engine (a real logged-in account) instead
-# of trigger_engine (Composio's push-based triggers, which the bot-based
-# Telegram integration would use if Composio ever adds a trigger for it).
-TELEGRAM_PERSONAL_SLUG = "".join(ch for ch in TELEGRAM_PERSONAL_APP_NAME.lower() if ch.isalnum())
-TELEGRAM_BOT_SLUG = "".join(ch for ch in TELEGRAM_BOT_APP_NAME.lower() if ch.isalnum())
+# slugify_app_name("Telegram Personal Account") — the trigger.event_app
+# value planner.py uses for "my telegram"/"saved messages" style
+# automations, which listen via telegram_client_engine (a real logged-in
+# account) instead of trigger_engine (Composio's push-based triggers, which
+# the bot-based Telegram integration would use if Composio ever adds a
+# trigger for it).
+TELEGRAM_PERSONAL_SLUG = slugify_app_name(TELEGRAM_PERSONAL_APP_NAME)
+TELEGRAM_BOT_SLUG = slugify_app_name(TELEGRAM_BOT_APP_NAME)
 
 def _to_public_agent(row: Dict[str, Any]) -> Dict[str, Any]:
     """The agents table stores an `is_active` boolean, but the frontend's
@@ -72,10 +74,6 @@ def _event_trigger_target(blueprint: Dict[str, Any]) -> Optional[Dict[str, Any]]
     return {"app": event_app, "target": trigger.get("event_target")}
 
 
-def _slugify_app(app: str) -> str:
-    return "".join(ch for ch in (app or "").lower() if ch.isalnum())
-
-
 async def arm_event_trigger(agent_id: str, user_id: str, blueprint: Dict[str, Any]) -> None:
     """Best-effort: starts the live listener for an event_trigger agent —
     either Composio's push-based trigger (trigger_engine) or, for a personal
@@ -93,7 +91,7 @@ async def arm_event_trigger(agent_id: str, user_id: str, blueprint: Dict[str, An
         )
         return
 
-    slug = _slugify_app(target["app"])
+    slug = slugify_app_name(target["app"])
     intent_description = (blueprint.get("trigger") or {}).get("details")
     try:
         if slug in (TELEGRAM_PERSONAL_SLUG, TELEGRAM_BOT_SLUG):
