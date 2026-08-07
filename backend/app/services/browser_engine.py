@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from browser_use import Agent, Browser, ChatGoogle
 from app.config import settings
+from app.services.browser_stealth import chromium_launch_kwargs, desktop_user_agent
 
 # Explicitly prepend the project's local venv/bin path
 venv_bin = str(Path(__file__).parent.parent.parent / "venv" / "bin")
@@ -39,19 +40,6 @@ async def execute_browser_action(
             api_key=gemini_key
         )
         
-        # Find local Playwright chromium if available to prevent downloading via uvx
-        executable_path = None
-        import glob
-        patterns = [
-            os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"),
-            os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
-        ]
-        for pattern in patterns:
-            matches = glob.glob(pattern)
-            if matches:
-                executable_path = matches[0]
-                break
-                
         # Setup Browser Context with stored session cookies from Vault if app_name is provided
         storage_state = None
         sensitive_data = None
@@ -87,9 +75,13 @@ async def execute_browser_action(
         if session_cookies and storage_state is None:
             storage_state = {"cookies": session_cookies, "origins": []}
 
-        browser_kwargs = {"headless": True}
-        if executable_path:
-            browser_kwargs["executable_path"] = executable_path
+        # Same anti-fingerprinting config as the headed login-capture window
+        # (browser_login_engine.py) — a task step running against a
+        # bot-protected site (e.g. browsing showtimes on a ticketing site
+        # right after a successful login) is just as exposed to the same
+        # detection, headless if anything more so historically.
+        browser_kwargs = chromium_launch_kwargs(headless=True)
+        browser_kwargs["user_agent"] = desktop_user_agent()
         if storage_state:
             browser_kwargs["storage_state"] = storage_state
 

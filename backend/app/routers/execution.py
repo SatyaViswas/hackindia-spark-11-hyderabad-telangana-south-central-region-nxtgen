@@ -280,15 +280,18 @@ class ScheduleUpdateRequest(BaseModel):
 
 @router.patch("/agents/{agent_id}/schedule")
 async def update_agent_schedule(agent_id: str, request: ScheduleUpdateRequest):
+    print(f"--- INCOMING PATCH REQUEST for {agent_id}: {request.dict()} ---")
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase not configured")
 
     try:
         payload = {
-            "trigger_type": request.trigger_type,
-            "cron_schedule": request.cron_schedule,
             "is_active": request.status == "active",
         }
+        if request.trigger_type:
+            payload["trigger_type"] = request.trigger_type
+        if request.cron_schedule is not None:
+            payload["cron_schedule"] = request.cron_schedule
         response = supabase.table("agents").update(payload).eq("id", agent_id).execute()
 
         if not response.data:

@@ -1,10 +1,9 @@
 import base64
-import glob
-import os
 import time
 import traceback
 import uuid
 from playwright.async_api import async_playwright
+from app.services.browser_stealth import apply_stealth, chromium_launch_kwargs, desktop_user_agent
 from app.services.vault import save_app_credentials
 
 WHATSAPP_URL = "https://web.whatsapp.com"
@@ -14,20 +13,6 @@ SESSION_TTL_SECONDS = 5 * 60  # abandon a session nobody has polled in 5 minutes
 # headless browser tab pointed at web.whatsapp.com; a session lives only as
 # long as it takes the user to scan (or cancel/expire).
 _sessions: dict[str, dict] = {}
-
-
-def _find_local_chromium() -> str | None:
-    patterns = [
-        os.path.expanduser(
-            "~/Library/Caches/ms-playwright/chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-        ),
-        os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
-    ]
-    for pattern in patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            return matches[0]
-    return None
 
 
 async def _capture_qr(page) -> str | None:
@@ -91,25 +76,20 @@ async def start_whatsapp_qr_session(user_id: str) -> dict:
     await _sweep_expired_sessions()
 
     playwright = await async_playwright().start()
-    launch_kwargs = {"headless": True}
-    executable_path = _find_local_chromium()
-    if executable_path:
-        launch_kwargs["executable_path"] = executable_path
 
     try:
-        browser = await playwright.chromium.launch(**launch_kwargs)
+        browser = await playwright.chromium.launch(**chromium_launch_kwargs(headless=True))
         # WhatsApp Web's own browser-compatibility check rejects Playwright's
         # default UA (it includes a "HeadlessChrome/" token) with a "please
         # update Chrome" wall instead of ever showing a QR code. Presenting
         # as a normal desktop Chrome UA — and hiding navigator.webdriver,
         # which several sites treat as an automation signal — is what
-        # actually gets the real QR to render.
-        normal_ua = (
-            f"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-            f"(KHTML, like Gecko) Chrome/{browser.version} Safari/537.36"
+        # actually gets the real QR to render. See browser_stealth.py,
+        # shared with every other browser this app launches.
+        context = await browser.new_context(
+            user_agent=desktop_user_agent(browser.version), viewport={"width": 1280, "height": 900}
         )
-        context = await browser.new_context(user_agent=normal_ua, viewport={"width": 1280, "height": 900})
-        await context.add_init_script("Object.defineProperty(navigator, 'webdriver', { get: () => undefined });")
+        await apply_stealth(context)
         page = await context.new_page()
         await page.goto(WHATSAPP_URL, wait_until="domcontentloaded", timeout=30000)
 

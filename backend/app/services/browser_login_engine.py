@@ -1,10 +1,9 @@
 import asyncio
-import glob
-import os
 import time
 import traceback
 import uuid
 from playwright.async_api import async_playwright
+from app.services.browser_stealth import apply_stealth, chromium_launch_kwargs, desktop_user_agent
 from app.services.vault import save_app_credentials
 
 SESSION_TTL_SECONDS = 10 * 60  # abandon a session nobody has captured/cancelled in 10 minutes
@@ -20,20 +19,6 @@ SESSION_TTL_SECONDS = 10 * 60  # abandon a session nobody has captured/cancelled
 # resulting cookies straight out of the browser and stores them the exact
 # same way execute_browser_action already knows how to consume them.
 _sessions: dict[str, dict] = {}
-
-
-def _find_local_chromium() -> str | None:
-    patterns = [
-        os.path.expanduser(
-            "~/Library/Caches/ms-playwright/chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
-        ),
-        os.path.expanduser("~/Library/Caches/ms-playwright/chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"),
-    ]
-    for pattern in patterns:
-        matches = glob.glob(pattern)
-        if matches:
-            return matches[0]
-    return None
 
 
 async def _cleanup_session(session_id: str) -> None:
@@ -66,14 +51,11 @@ async def start_browser_login_session(user_id: str, app_name: str, login_url: st
     await _sweep_expired_sessions()
 
     playwright = await async_playwright().start()
-    launch_kwargs = {"headless": False}
-    executable_path = _find_local_chromium()
-    if executable_path:
-        launch_kwargs["executable_path"] = executable_path
 
     try:
-        browser = await playwright.chromium.launch(**launch_kwargs)
-        context = await browser.new_context(viewport=None)
+        browser = await playwright.chromium.launch(**chromium_launch_kwargs(headless=False))
+        context = await browser.new_context(viewport=None, user_agent=desktop_user_agent(browser.version))
+        await apply_stealth(context)
         page = await context.new_page()
         if login_url:
             try:
