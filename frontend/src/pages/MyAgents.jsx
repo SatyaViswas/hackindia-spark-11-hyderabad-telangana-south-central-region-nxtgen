@@ -129,20 +129,23 @@ export default function MyAgents() {
   );
 
   const handleToggleStatus = async (agent) => {
-    const nextStatus = agent.status === "active" ? "paused" : "active";
+    const currentStatus = agent.status || "active";
+    const nextStatus = currentStatus === "active" ? "paused" : "active";
+    
     setAgents((prev) => prev.map((a) => (a.id === agent.id ? { ...a, status: nextStatus } : a)));
     setActionError(null);
     try {
       await updateAgentSchedule(agent.id, {
-        triggerType: agent.trigger_type,
-        cronSchedule: agent.cron_schedule,
+        triggerType: agent.trigger_type || "scheduled",
+        cronSchedule: agent.cron_schedule || null,
         status: nextStatus,
       });
       if (agent.trigger_type === "event_trigger") {
         setTimeout(() => fetchTriggerStatuses([agent]), 1500);
       }
     } catch (err) {
-      setAgents((prev) => prev.map((a) => (a.id === agent.id ? { ...a, status: agent.status } : a)));
+      console.error("Failed to toggle agent status:", err);
+      setAgents((prev) => prev.map((a) => (a.id === agent.id ? { ...a, status: currentStatus } : a)));
       setActionError(err.message || t("myAgents.statusFailed"));
     }
   };
